@@ -4,13 +4,35 @@
 import pyopencl as cl
 import numpy as np
 from time import time
+import sys
 
-# Define Matrix and Split Sizes
-N = 8192
-ROWS_NV = 7632    # NVIDIA's share (93.14%)
-ROWS_INT = 560    # Intel's share (6.86%)
+# ----- command‑line arguments -------------------------------------------------
+if len(sys.argv) < 3:
+    raise SystemExit("Usage: python script.py <gpu_flops> <igpu_flops>")
+gpu_flops  = float(sys.argv[1])
+igpu_flops = float(sys.argv[2])
+
+total = gpu_flops + igpu_flops
+gpu_pct = gpu_flops / total if total else 0.0
+igpu_pct = igpu_flops / total if total else 0.0
+    
+# ----- matrix size -----------------------------------------------------------
+N = 8192                         # square matrices
+LOCAL = (16, 16)                 # fixed local work‑group size
+
+
+# ----- compute row split, then round up to a multiple of LOCAL[0] ------------
+rows_nv = int(N * gpu_pct)                     # inital split
+rows_nv = (rows_nv // LOCAL[0]) * LOCAL[0]     # round down to multiple of 16
+rows_int = N - rows_nv                         
+
+print(f"NVIDIA rows : {rows_nv} ({gpu_pct*100:.2f} %)")
+print(f"iGPU rows    : {rows_int} ({igpu_pct*100:.2f} %)")
+print(f"Global sizes → NVIDIA {(rows_nv, N)} , iGPU {(rows_int, N)}")
+print(f"Local size   → {LOCAL}")
+
+
 COUNT = 10        # Number of times to run the test
-
 AVAL = 2.0
 BVAL = 3.0
 
@@ -20,14 +42,14 @@ h_A = np.full(N * N, AVAL, dtype=np.float32)
 h_B = np.full(N * N, BVAL, dtype=np.float32)
 
 # SLICE MATRIX A:
-# NVIDIA gets the first 7632 rows. Intel gets the remaining 560 rows.
+# NVIDIA gets the first 'rows_nv' rows. Intel gets the remaining 560 rows.
 # Matrix B is needed completely by both devices to do the math.
-h_A_nv = h_A[: ROWS_NV * N]
-h_A_int = h_A[ROWS_NV * N :]
+h_A_nv = h_A[: rows_nv * N]
+h_A_int = h_A[rows_nv * N :]
 
 # Output buffers
-h_C_nv = np.empty(ROWS_NV * N, dtype=np.float32)
-h_C_int = np.empty(ROWS_INT * N, dtype=np.float32)
+h_C_nv = np.empty(rows_nv * N, dtype=np.float32)
+h_C_int = np.empty(rows_int * N, dtype=np.float32)
 
 # -------------------------------------------------------------------------
 # 1. AUTO-DETECT DEVICES
@@ -40,7 +62,7 @@ for p in platforms:
     for d in p.get_devices():
         if "NVIDIA" in d.name:
             dev_nv = d
-        elif "Portable" in p.name or "Intel" in d.name or "pthread" in d.name:
+        elif "Graphics" in p.name and "Graphics" in d.name:
             dev_int = d
 
 if not dev_nv or not dev_int:
@@ -92,15 +114,17 @@ start_time = time()
 
 for i in range(COUNT):
     # Dispatch NVIDIA (Global sizes match the uncoalesced i,j logic)
-    # i=row (ROWS_NV), j=col (N)
-    global_dim_nv = (ROWS_NV, N)
+    # i=row (rows_nv), j=col (N)
+    global_dim_nv = (rows_nv, N)
     local_dim_nv = (16, 16)
+    print("[debug]", queue_nv, global_dim_nv, local_dim_nv, np.int32(N), d_A_nv, d_B_nv, d_C_nv)
     mmul_nv(queue_nv, global_dim_nv, local_dim_nv, np.int32(N), d_A_nv, d_B_nv, d_C_nv)
 
     # Dispatch Intel (myGEMM3 uses WPT=4, so X-dimension N is divided by 4)
     WPT = 4
-    global_dim_int = (int(N / WPT), ROWS_INT)
+    global_dim_int = (int(N / WPT), rows_int)
     local_dim_int = (int(16 / WPT), 16)
+    print("[debug]", queue_int, global_dim_int, local_dim_int, np.int32(N), d_A_int, d_B_int, d_C_int)
     mmul_int(queue_int, global_dim_int, local_dim_int, np.int32(N), d_A_int, d_B_int, d_C_int)
 
     # Wait for BOTH devices to finish their halves!

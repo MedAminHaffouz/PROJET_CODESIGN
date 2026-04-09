@@ -1,0 +1,25 @@
+settings:
+rtx3050 & L=16,16
+intel UHD7770 L=4,16
+
+# matmul_coalsced.py
+1.2865984439849854 seconds at 267058.75892075134 MFLOPS
+
+# matmul_myGEMM3.py
+0.638293981552124 seconds at 538305.8490454234 MFLOPS
+
+# matmul_uncoalsced_q2.py
+217.58430671691895 seconds at 101065.34284262368 MFLOPS
+
+# matmul_myGEMM3_q2.py
+200.39565896987915 seconds at 109734.07641941626 MFLOPS
+
+# matmull_hetereginous.py
+$ py matmul_heterogenous.py 101065.34284262368 109734.07641941626
+NVIDIA rows : 3920 (47.94 %)
+iGPU rows    : 4272 (52.06 %)
+Global sizes → NVIDIA (3920, 8192) , iGPU (4272, 8192)
+Local size   → (16, 16)
+Initializing Matrices for N=8192...
+Total time for 10 runs: 52.9587 seconds
+Total Heterogeneous Performance: 207.62 GFLOPS/sec
